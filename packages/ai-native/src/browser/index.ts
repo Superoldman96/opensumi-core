@@ -1,4 +1,4 @@
-import { Autowired, Injectable, Provider } from '@opensumi/di';
+import { Autowired, Injectable, Injector, Provider } from '@opensumi/di';
 import {
   AIBackSerivcePath,
   AIBackSerivceToken,
@@ -6,14 +6,21 @@ import {
   BrowserModule,
   ChatAgentViewServiceToken,
   ChatFeatureRegistryToken,
+  ChatHistoryRegistryToken,
+  ChatInputFooterRegistryToken,
+  ChatInputRegistryToken,
   ChatRenderRegistryToken,
   ChatServiceToken,
+  ChatViewRegistryToken,
   IAIInlineChatService,
   InlineChatFeatureRegistryToken,
   RenameCandidatesProviderRegistryToken,
   ResolveConflictRegistryToken,
 } from '@opensumi/ide-core-browser';
 import {
+  AcpPermissionServicePath,
+  AcpPermissionServiceToken,
+  IACPConfigProvider,
   IntelligentCompletionsRegistryToken,
   MCPConfigServiceToken,
   ProblemFixRegistryToken,
@@ -24,6 +31,7 @@ import { FolderFilePreferenceProvider } from '@opensumi/ide-preferences/lib/brow
 
 import {
   ChatProxyServiceToken,
+  DefaultChatAgentToken,
   IAIInlineCompletionsProvider,
   IChatAgentService,
   IChatInternalService,
@@ -35,17 +43,34 @@ import {
 import { LLMContextServiceToken } from '../common/llm-context';
 import { MCPServerManager, MCPServerManagerPath } from '../common/mcp-server-manager';
 import { ChatAgentPromptProvider, DefaultChatAgentPromptProvider } from '../common/prompts/context-prompt-provider';
+import { ACPChatAgentPromptProvider } from '../common/prompts/empty-prompt-provider';
 
+import { AcpPermissionBridgeService, AcpPermissionRpcService } from './acp';
+import { AcpFooterContribution } from './acp/components/AcpFooterContribution';
+import { AcpPermissionDialogContribution, PermissionDialogManager } from './acp/permission-dialog-container';
 import { AINativeBrowserContribution } from './ai-core.contribution';
+import { AcpChatAgent } from './chat/acp-chat-agent';
+import { ACPSessionProvider } from './chat/acp-session-provider';
 import { ApplyService } from './chat/apply.service';
 import { ChatAgentService } from './chat/chat-agent.service';
 import { ChatAgentViewService } from './chat/chat-agent.view.service';
+import { ChatInputFooterRegistry } from './chat/chat-input-footer.registry';
 import { ChatManagerService } from './chat/chat-manager.service';
+import { AcpChatManagerService } from './chat/chat-manager.service.acp';
 import { ChatProxyService } from './chat/chat-proxy.service';
+import { AcpChatProxyService } from './chat/chat-proxy.service.acp';
 import { ChatService } from './chat/chat.api.service';
 import { ChatFeatureRegistry } from './chat/chat.feature.registry';
+import { ChatHistoryRegistry } from './chat/chat.history.registry';
+import { ChatInputRegistry } from './chat/chat.input.registry';
 import { ChatInternalService } from './chat/chat.internal.service';
+import { AcpChatInternalService } from './chat/chat.internal.service.acp';
 import { ChatRenderRegistry } from './chat/chat.render.registry';
+import { ChatViewRegistry } from './chat/chat.view.registry';
+import { DefaultACPConfigProvider } from './chat/default-acp-config-provider';
+import { DefaultChatAgent } from './chat/default-chat-agent';
+import { LocalStorageProvider } from './chat/local-storage-provider';
+import { ISessionProviderRegistry, SessionProviderRegistry } from './chat/session-provider-registry';
 import { LlmContextContribution } from './context/llm-context.contribution';
 import { LLMContextServiceImpl } from './context/llm-context.service';
 import { AICodeActionContribution } from './contrib/code-action/code-action.contribution';
@@ -106,6 +131,25 @@ export class AINativeModule extends BrowserModule {
     MCPConfigContribution,
     MCPConfigCommandContribution,
     MCPPreferencesContribution,
+    AcpPermissionDialogContribution,
+    PermissionDialogManager,
+    AcpPermissionBridgeService,
+    {
+      token: ISessionProviderRegistry,
+      useClass: SessionProviderRegistry,
+    },
+    // ACP Config Provider
+    {
+      token: IACPConfigProvider,
+      useClass: DefaultACPConfigProvider,
+    },
+    // Session Providers
+    LocalStorageProvider,
+    ACPSessionProvider,
+    // ACP service subclasses (used conditionally via factory)
+    AcpChatManagerService,
+    AcpChatInternalService,
+    AcpChatProxyService,
 
     // MCP Server Contributions START
     ListDirTool,
@@ -121,6 +165,7 @@ export class AINativeModule extends BrowserModule {
     // Context Service
     LlmContextContribution,
     RulesContribution,
+    AcpFooterContribution,
     {
       token: LLMContextServiceToken,
       useClass: LLMContextServiceImpl,
@@ -147,6 +192,22 @@ export class AINativeModule extends BrowserModule {
       useClass: ChatRenderRegistry,
     },
     {
+      token: ChatInputRegistryToken,
+      useClass: ChatInputRegistry,
+    },
+    {
+      token: ChatViewRegistryToken,
+      useClass: ChatViewRegistry,
+    },
+    {
+      token: ChatHistoryRegistryToken,
+      useClass: ChatHistoryRegistry,
+    },
+    {
+      token: ChatInputFooterRegistryToken,
+      useClass: ChatInputFooterRegistry,
+    },
+    {
       token: ResolveConflictRegistryToken,
       useClass: ResolveConflictRegistry,
     },
@@ -160,7 +221,13 @@ export class AINativeModule extends BrowserModule {
     },
     {
       token: IChatManagerService,
-      useClass: ChatManagerService,
+      useFactory: (injector: Injector) => {
+        const config = injector.get(AINativeConfigService);
+        if (config.capabilities.supportsAgentMode) {
+          return injector.get(AcpChatManagerService);
+        }
+        return injector.get(ChatManagerService);
+      },
     },
     {
       token: IChatAgentService,
@@ -172,12 +239,30 @@ export class AINativeModule extends BrowserModule {
     },
     {
       token: IChatInternalService,
-      useClass: ChatInternalService,
+      useFactory: (injector: Injector) => {
+        const config = injector.get(AINativeConfigService);
+        if (config.capabilities.supportsAgentMode) {
+          return injector.get(AcpChatInternalService);
+        }
+        return injector.get(ChatInternalService);
+      },
     },
     {
       token: ChatProxyServiceToken,
-      useClass: ChatProxyService,
+      useFactory: (injector: Injector) => {
+        const config = injector.get(AINativeConfigService);
+        if (config.capabilities.supportsAgentMode) {
+          return injector.get(AcpChatProxyService);
+        }
+        return injector.get(ChatProxyService);
+      },
     },
+    {
+      token: DefaultChatAgentToken,
+      useClass: DefaultChatAgent,
+    },
+    // ACP Agent - 用于 ACP 模式
+    AcpChatAgent,
     {
       token: ChatServiceToken,
       useClass: ChatService,
@@ -204,7 +289,13 @@ export class AINativeModule extends BrowserModule {
     },
     {
       token: ChatAgentPromptProvider,
-      useClass: DefaultChatAgentPromptProvider,
+      useFactory(injector) {
+        const config = injector.get(AINativeConfigService);
+        if (config.capabilities.supportsAgentMode) {
+          return injector.get(ACPChatAgentPromptProvider);
+        }
+        return injector.get(DefaultChatAgentPromptProvider);
+      },
     },
     {
       token: InlineDiffServiceToken,
@@ -228,6 +319,10 @@ export class AINativeModule extends BrowserModule {
       dropdownForTag: true,
       tag: 'mcp',
     },
+    {
+      token: AcpPermissionServiceToken,
+      useClass: AcpPermissionRpcService,
+    },
   ];
 
   backServices = [
@@ -243,6 +338,10 @@ export class AINativeModule extends BrowserModule {
     {
       clientToken: TokenMCPServerProxyService,
       servicePath: SumiMCPServerProxyServicePath,
+    },
+    {
+      servicePath: AcpPermissionServicePath,
+      clientToken: AcpPermissionServiceToken,
     },
   ];
 }

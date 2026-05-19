@@ -1,3 +1,5 @@
+import React from 'react';
+
 import { Autowired, INJECTOR_TOKEN, Injector } from '@opensumi/di';
 import {
   AINativeConfigService,
@@ -27,6 +29,7 @@ import {
   TabbarBehaviorConfig,
   getIcon,
   localize,
+  useInjectable,
 } from '@opensumi/ide-core-browser';
 import {
   AI_CHAT_VISIBLE,
@@ -49,7 +52,11 @@ import { IBrowserCtxMenu } from '@opensumi/ide-core-browser/lib/menu/next/render
 import {
   AI_NATIVE_SETTING_GROUP_TITLE,
   ChatFeatureRegistryToken,
+  ChatHistoryRegistryToken,
+  ChatInputRegistryToken,
   ChatRenderRegistryToken,
+  ChatServiceToken,
+  ChatViewRegistryToken,
   CommandService,
   IDisposable,
   InlineChatFeatureRegistryToken,
@@ -62,6 +69,7 @@ import {
   STORAGE_NAMESPACE,
   StorageProvider,
   TerminalRegistryToken,
+  URI,
   isUndefined,
   runWhenIdle,
 } from '@opensumi/ide-core-common';
@@ -97,15 +105,26 @@ import {
   deepSeekModels,
   openAiNativeModels,
 } from '../common';
+import { LLMContextService, LLMContextServiceToken } from '../common/llm-context';
 import { MCPServerDescription, MCPServersDisabledKey } from '../common/mcp-server-manager';
 import { MCP_SERVER_TYPE } from '../common/types';
 
+import { AcpChatInput } from './acp/components/AcpChatInput';
+import { AcpChatMentionInput } from './acp/components/AcpChatMentionInput';
 import { ChatEditSchemeDocumentProvider } from './chat/chat-edit-resource';
 import { ChatManagerService } from './chat/chat-manager.service';
 import { ChatMultiDiffResolver } from './chat/chat-multi-diff-source';
 import { ChatProxyService } from './chat/chat-proxy.service';
+import { ChatService } from './chat/chat.api.service';
+import { IChatHistoryRegistry } from './chat/chat.history.registry';
+import { IChatInputRegistry } from './chat/chat.input.registry';
 import { ChatInternalService } from './chat/chat.internal.service';
 import { AIChatView } from './chat/chat.view';
+import { AIChatViewACP } from './chat/chat.view.acp';
+import { IChatViewRegistry } from './chat/chat.view.registry';
+import ChatHistoryACP from './components/ChatHistory.acp';
+import { ChatInput } from './components/ChatInput';
+import { ChatMentionInput } from './components/ChatMentionInput';
 import { CodeActionSingleHandler } from './contrib/code-action/code-action.handler';
 import { AIInlineCompletionsProvider } from './contrib/inline-completions/completeProvider';
 import { InlineCompletionsController } from './contrib/inline-completions/inline-completions.controller';
@@ -148,6 +167,15 @@ import { InlineStreamDiffService } from './widget/inline-stream-diff/inline-stre
 import { SumiLightBulbWidget } from './widget/light-bulb';
 
 export const INLINE_DIFF_MANAGER_WIDGET_ID = 'inline-diff-manager-widget';
+
+const DynamicChatViewWrapper: React.FC = () => {
+  const chatViewRegistry = useInjectable<IChatViewRegistry>(ChatViewRegistryToken);
+  const activeView = chatViewRegistry.getActiveChatView();
+  if (!activeView) {
+    return null;
+  }
+  return React.createElement(activeView.component);
+};
 
 @Domain(
   ClientAppContribution,
@@ -198,6 +226,15 @@ export class AINativeBrowserContribution
 
   @Autowired(ChatRenderRegistryToken)
   private readonly chatRenderRegistry: IChatRenderRegistry;
+
+  @Autowired(ChatInputRegistryToken)
+  private readonly chatInputRegistry: IChatInputRegistry;
+
+  @Autowired(ChatViewRegistryToken)
+  private readonly chatViewRegistry: IChatViewRegistry;
+
+  @Autowired(ChatHistoryRegistryToken)
+  private readonly chatHistoryRegistry: IChatHistoryRegistry;
 
   @Autowired(ResolveConflictRegistryToken)
   private readonly resolveConflictRegistry: IResolveConflictRegistry;
@@ -280,6 +317,12 @@ export class AINativeBrowserContribution
   @Autowired(StorageProvider)
   private readonly storageProvider: StorageProvider;
 
+  @Autowired(ChatServiceToken)
+  private readonly chatService: ChatService;
+
+  @Autowired(LLMContextServiceToken)
+  private readonly llmContextService: LLMContextService;
+
   @Autowired()
   private readonly chatEditResourceProvider: ChatEditSchemeDocumentProvider;
 
@@ -299,14 +342,19 @@ export class AINativeBrowserContribution
   }
 
   async initialize() {
-    const { supportsChatAssistant } = this.aiNativeConfigService.capabilities;
+    const { supportsChatAssistant, supportsAgentMode } = this.aiNativeConfigService.capabilities;
 
     if (supportsChatAssistant) {
       ComponentRegistryImpl.addLayoutModule(this.appConfig.layoutConfig, AI_CHAT_VIEW_ID, AI_CHAT_CONTAINER_ID);
       ComponentRegistryImpl.addLayoutModule(this.appConfig.layoutConfig, DESIGN_MENU_BAR_RIGHT, AI_CHAT_LOGO_AVATAR_ID);
       this.chatProxyService.registerDefaultAgent();
-      this.chatInternalService.init();
-      await this.chatManagerService.init();
+
+      // Local 模式：立即初始化
+      // ACP 模式：延迟到面板打开时初始化
+      if (!supportsAgentMode) {
+        this.chatInternalService.init();
+        this.chatManagerService.init();
+      }
     }
   }
 
@@ -536,9 +584,93 @@ export class AINativeBrowserContribution
       contribution.registerChatAgentPromptProvider?.();
     });
 
+    // 注册默认输入组件
+    this.registerDefaultInputs();
+
+    // 注册默认聊天视图和历史记录组件
+    this.registerChatViews();
+
+    // 注册内置的 "Chat" 按钮，将选中代码添加到 Chat 面板的 context 中
+    if (this.aiNativeConfigService.capabilities.supportsChatAssistant) {
+      this.inlineChatFeatureRegistry.registerEditorInlineChat(
+        {
+          id: 'ai-chat',
+          name: 'Chat',
+          title: 'Add to Chat',
+          renderType: 'button',
+        },
+        {
+          execute: async (editor, selection) => {
+            const model = editor.getModel();
+            if (!model) {
+              return;
+            }
+            const uri = model.uri;
+            const [startLine, endLine] = [selection.selectionStartLineNumber, selection.positionLineNumber].sort(
+              (a, b) => a - b,
+            );
+
+            this.llmContextService.addFileToContext(new URI(uri.toString()), [startLine, endLine], true);
+            this.chatService.sendMessage({ message: '', immediate: false });
+          },
+        },
+      );
+    }
+
     // 注册 Opensumi 框架提供的 MCP Server Tools 能力 (此时的 Opensumi 作为 MCP Server)
     this.mcpServerContributions.getContributions().forEach((contribution) => {
       contribution.registerMCPServer(this.mcpServerRegistry);
+    });
+  }
+
+  private registerDefaultInputs() {
+    this.chatInputRegistry.registerChatInput({
+      id: 'acp-mention-input',
+      component: AcpChatMentionInput,
+      priority: 200,
+      when: () => this.aiNativeConfigService.capabilities.supportsAgentMode,
+    });
+
+    this.chatInputRegistry.registerChatInput({
+      id: 'acp-chat-input',
+      component: AcpChatInput,
+      priority: 150,
+      when: () => this.aiNativeConfigService.capabilities.supportsAgentMode,
+    });
+
+    this.chatInputRegistry.registerChatInput({
+      id: 'mention-input',
+      component: ChatMentionInput,
+      priority: 100,
+      when: () => this.aiNativeConfigService.capabilities.supportsMCP,
+    });
+
+    this.chatInputRegistry.registerChatInput({
+      id: 'chat-input',
+      component: ChatInput,
+      priority: 50,
+    });
+  }
+
+  private registerChatViews() {
+    this.chatViewRegistry.registerChatView({
+      id: 'acp-chat-view',
+      component: AIChatViewACP,
+      priority: 200,
+      when: () => this.aiNativeConfigService.capabilities.supportsAgentMode,
+    });
+
+    this.chatHistoryRegistry.registerChatHistory({
+      id: 'acp-chat-history',
+      component: ChatHistoryACP,
+      priority: 200,
+      when: () => this.aiNativeConfigService.capabilities.supportsAgentMode,
+    });
+
+    this.chatViewRegistry.registerChatView({
+      id: 'default-chat-view',
+      component: AIChatView,
+      priority: 50,
     });
   }
 
@@ -671,6 +803,23 @@ export class AINativeBrowserContribution
           {
             id: AINativeSettingSectionsId.TerminalAutoRun,
             localized: 'ai.native.terminal.autorun',
+          },
+        ],
+      });
+    }
+
+    // Register Agent configs settings
+    if (this.aiNativeConfigService.capabilities.supportsAgentMode) {
+      registry.registerSettingSection(AI_NATIVE_SETTING_GROUP_ID, {
+        title: localize('preference.ai.native.agent.configs.title'),
+        preferences: [
+          {
+            id: AINativeSettingSectionsId.AgentConfigs,
+            localized: 'preference.ai.native.agent.configs',
+          },
+          {
+            id: AINativeSettingSectionsId.DefaultAgentType,
+            localized: 'preference.ai.native.agent.defaultType',
           },
         ],
       });
@@ -842,7 +991,7 @@ export class AINativeBrowserContribution
 
   registerComponent(registry: ComponentRegistry): void {
     registry.register(AI_CHAT_CONTAINER_ID, [], {
-      component: AIChatView,
+      component: DynamicChatViewWrapper,
       title: localize('aiNative.chat.ai.assistant.name'),
       iconClass: getIcon('magic-wand'),
       containerId: AI_CHAT_CONTAINER_ID,

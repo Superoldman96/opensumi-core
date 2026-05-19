@@ -41,6 +41,7 @@ export interface MentionState {
   inlineSearchActive: boolean; // 是否在输入框中进行二级搜索
   inlineSearchStartPos: number | null; // 内联搜索的起始位置
   loading: boolean; // 加载状态
+  trigger: '@' | '/'; // 触发面板的字符
 }
 
 interface ModelOption {
@@ -113,6 +114,7 @@ export interface MentionInputProps {
   loading?: boolean;
   onSelectionChange?: (value: string) => void;
   onImageUpload?: (files: File[]) => Promise<void>;
+  onSlashSelect?: (nameWithSlash: string) => void; // 通知父组件 slash command 被选中
   footerConfig?: FooterConfig; // 新增配置项
   mentionKeyword?: string;
   labelService?: LabelService;

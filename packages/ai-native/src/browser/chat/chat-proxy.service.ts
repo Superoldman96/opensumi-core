@@ -42,7 +42,7 @@ export class ChatProxyService extends Disposable {
   static readonly AGENT_ID = 'Default_Chat_Agent';
 
   @Autowired(IChatAgentService)
-  private readonly chatAgentService: IChatAgentService;
+  protected readonly chatAgentService: IChatAgentService;
 
   @Autowired(AIBackSerivcePath)
   private readonly aiBackService: IAIBackService;
@@ -57,13 +57,13 @@ export class ChatProxyService extends Disposable {
   private readonly aiReporter: IAIReporter;
 
   @Autowired(ChatAgentViewServiceToken)
-  private readonly chatAgentViewService: IChatAgentViewService;
+  protected readonly chatAgentViewService: IChatAgentViewService;
 
   @Autowired(PreferenceService)
   private readonly preferenceService: PreferenceService;
 
   @Autowired(IApplicationService)
-  private readonly applicationService: IApplicationService;
+  protected readonly applicationService: IApplicationService;
 
   @Autowired(IMessageService)
   private readonly messageService: IMessageService;

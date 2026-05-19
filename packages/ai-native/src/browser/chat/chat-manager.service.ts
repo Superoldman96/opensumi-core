@@ -62,9 +62,10 @@ class DisposableLRUCache<K, V extends IDisposable = IDisposable> extends LRUCach
 
 @Injectable()
 export class ChatManagerService extends Disposable {
-  #sessionModels = this.registerDispose(new DisposableLRUCache<string, ChatModel>(MAX_SESSION_COUNT));
+  // Exposed as protected so AcpChatManagerService subclass can access it
+  protected sessionModels = this.registerDispose(new DisposableLRUCache<string, ChatModel>(MAX_SESSION_COUNT));
   #pendingRequests = this.registerDispose(new DisposableMap<string, CancellationTokenSource>());
-  private storageInitEmitter = new Emitter<void>();
+  protected storageInitEmitter = new Emitter<void>();
   public onStorageInit = this.storageInitEmitter.event;
 
   @Autowired(INJECTOR_TOKEN)
@@ -80,7 +81,7 @@ export class ChatManagerService extends Disposable {
   private preferenceService: PreferenceService;
 
   @Autowired(ChatFeatureRegistryToken)
-  private chatFeatureRegistry: ChatFeatureRegistry;
+  protected chatFeatureRegistry: ChatFeatureRegistry;
 
   private _chatStorage: IStorage;
 
@@ -88,14 +89,11 @@ export class ChatManagerService extends Disposable {
     return data
       .filter((item) => item.history.messages.length > 0)
       .map((item) => {
-        const model = new ChatModel(
-          this.chatFeatureRegistry,
-          {
-            sessionId: item.sessionId,
-            history: new MsgHistoryManager(this.chatFeatureRegistry, item.history),
-            modelId: item.modelId,
-          },
-        );
+        const model = new ChatModel(this.chatFeatureRegistry, {
+          sessionId: item.sessionId,
+          history: new MsgHistoryManager(this.chatFeatureRegistry, item.history),
+          modelId: item.modelId,
+        });
         const requests = item.requests.map(
           (request) =>
             new ChatRequestModel(
@@ -127,35 +125,33 @@ export class ChatManagerService extends Disposable {
     const sessionsModelData = this._chatStorage.get<ISessionModel[]>('sessionModels', []);
     const savedSessions = this.fromJSON(sessionsModelData);
     savedSessions.forEach((session) => {
-      this.#sessionModels.set(session.sessionId, session);
+      this.sessionModels.set(session.sessionId, session);
       this.listenSession(session);
     });
     await this.storageInitEmitter.fireAndAwait();
   }
 
   getSessions() {
-    return Array.from(this.#sessionModels.values());
+    return Array.from(this.sessionModels.values());
   }
 
-  startSession() {
-    const model = new ChatModel(
-      this.chatFeatureRegistry,
-    );
-    this.#sessionModels.set(model.sessionId, model);
+  async startSession(): Promise<ChatModel> {
+    const model = new ChatModel(this.chatFeatureRegistry);
+    this.sessionModels.set(model.sessionId, model);
     this.listenSession(model);
     return model;
   }
 
   getSession(sessionId: string): ChatModel | undefined {
-    return this.#sessionModels.get(sessionId);
+    return this.sessionModels.get(sessionId);
   }
 
   clearSession(sessionId: string) {
-    const model = this.#sessionModels.get(sessionId) as ChatModel;
+    const model = this.sessionModels.get(sessionId) as ChatModel;
     if (!model) {
       throw new Error(`Unknown session: ${sessionId}`);
     }
-    this.#sessionModels.disposeKey(sessionId);
+    this.sessionModels.disposeKey(sessionId);
     this.#pendingRequests.get(sessionId)?.cancel();
     this.#pendingRequests.disposeKey(sessionId);
     this.saveSessions();

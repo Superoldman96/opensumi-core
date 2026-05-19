@@ -18,22 +18,23 @@ export class ChatInternalService extends Disposable {
   @Autowired(PreferenceService)
   protected preferenceService: PreferenceService;
 
+  // Exposed as protected so AcpChatInternalService subclass can access it
   @Autowired(IChatManagerService)
-  private chatManagerService: ChatManagerService;
+  protected chatManagerService: ChatManagerService;
 
   private readonly _onChangeRequestId = new Emitter<string>();
   public readonly onChangeRequestId: Event<string> = this._onChangeRequestId.event;
 
-  private readonly _onChangeSession = new Emitter<string>();
+  protected readonly _onChangeSession = new Emitter<string>();
   public readonly onChangeSession: Event<string> = this._onChangeSession.event;
 
   private readonly _onCancelRequest = new Emitter<void>();
   public readonly onCancelRequest: Event<void> = this._onCancelRequest.event;
 
-  private readonly _onWillClearSession = new Emitter<string>();
+  protected readonly _onWillClearSession = new Emitter<string>();
   public readonly onWillClearSession: Event<string> = this._onWillClearSession.event;
 
-  private readonly _onRegenerateRequest = new Emitter<void>();
+  protected readonly _onRegenerateRequest = new Emitter<void>();
   public readonly onRegenerateRequest: Event<void> = this._onRegenerateRequest.event;
 
   private _latestRequestId: string;
@@ -41,18 +42,19 @@ export class ChatInternalService extends Disposable {
     return this._latestRequestId;
   }
 
-  #sessionModel: ChatModel;
+  // Exposed as protected so AcpChatInternalService subclass can access it
+  protected _sessionModel: ChatModel;
   get sessionModel() {
-    return this.#sessionModel;
+    return this._sessionModel;
   }
 
   init() {
-    this.chatManagerService.onStorageInit(() => {
+    this.chatManagerService.onStorageInit(async () => {
       const sessions = this.chatManagerService.getSessions();
       if (sessions.length > 0) {
-        this.activateSession(sessions[sessions.length - 1].sessionId);
+        await this.activateSession(sessions[sessions.length - 1].sessionId);
       } else {
-        this.createSessionModel();
+        await this.createSessionModel();
       }
     });
   }
@@ -63,11 +65,11 @@ export class ChatInternalService extends Disposable {
   }
 
   createRequest(input: string, agentId: string, images?: string[], command?: string) {
-    return this.chatManagerService.createRequest(this.#sessionModel.sessionId, input, agentId, command, images);
+    return this.chatManagerService.createRequest(this._sessionModel.sessionId, input, agentId, command, images);
   }
 
   sendRequest(request: ChatRequestModel, regenerate = false) {
-    const result = this.chatManagerService.sendRequest(this.#sessionModel.sessionId, request, regenerate);
+    const result = this.chatManagerService.sendRequest(this._sessionModel.sessionId, request, regenerate);
     if (regenerate) {
       this._onRegenerateRequest.fire();
     }
@@ -75,23 +77,23 @@ export class ChatInternalService extends Disposable {
   }
 
   cancelRequest() {
-    this.chatManagerService.cancelRequest(this.#sessionModel.sessionId);
+    this.chatManagerService.cancelRequest(this._sessionModel.sessionId);
     this._onCancelRequest.fire();
   }
 
-  createSessionModel() {
-    this.#sessionModel = this.chatManagerService.startSession();
-    this._onChangeSession.fire(this.#sessionModel.sessionId);
+  async createSessionModel() {
+    this._sessionModel = await this.chatManagerService.startSession();
+    this._onChangeSession.fire(this._sessionModel.sessionId);
   }
 
-  clearSessionModel(sessionId?: string) {
-    sessionId = sessionId || this.#sessionModel.sessionId;
+  async clearSessionModel(sessionId?: string) {
+    sessionId = sessionId || this._sessionModel.sessionId;
     this._onWillClearSession.fire(sessionId);
     this.chatManagerService.clearSession(sessionId);
-    if (sessionId === this.#sessionModel.sessionId) {
-      this.#sessionModel = this.chatManagerService.startSession();
+    if (sessionId === this._sessionModel.sessionId) {
+      this._sessionModel = await this.chatManagerService.startSession();
     }
-    this._onChangeSession.fire(this.#sessionModel.sessionId);
+    this._onChangeSession.fire(this._sessionModel.sessionId);
   }
 
   getSessions() {
@@ -107,12 +109,12 @@ export class ChatInternalService extends Disposable {
     if (!targetSession) {
       throw new Error(`There is no session with session id ${sessionId}`);
     }
-    this.#sessionModel = targetSession;
-    this._onChangeSession.fire(this.#sessionModel.sessionId);
+    this._sessionModel = targetSession;
+    this._onChangeSession.fire(this._sessionModel.sessionId);
   }
 
   override dispose(): void {
-    this.#sessionModel?.dispose();
+    this._sessionModel?.dispose();
     super.dispose();
   }
 }

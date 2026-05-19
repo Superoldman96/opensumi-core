@@ -1,13 +1,17 @@
-import { CancellationToken, MaybePromise, Uri } from '@opensumi/ide-utils';
+import { CancellationToken, IDisposable, MaybePromise, Uri } from '@opensumi/ide-utils';
+import { Event } from '@opensumi/ide-utils/lib/event';
 import { SumiReadableStream } from '@opensumi/ide-utils/lib/stream';
 
 import { FileType } from '../file';
 import { IMarkdownString } from '../markdown';
 
+import { AvailableCommand, ListSessionsResponse } from './acp-types';
+import { AgentProcessConfig } from './agent-types';
 import { IAIReportCompletionOption } from './reporter';
 
 import type { CoreMessage } from 'ai';
 export * from './reporter';
+export type { AvailableCommand };
 
 export interface IAINativeCapabilities {
   /**
@@ -58,6 +62,10 @@ export interface IAINativeCapabilities {
    * supports modelcontextprotocol
    */
   supportsMCP?: boolean;
+  /**
+   * supports agent mode for chat input
+   */
+  supportsAgentMode?: boolean;
 }
 
 export interface IDesignLayoutConfig {
@@ -188,6 +196,7 @@ export interface IAIBackServiceOption {
   /** 响应首尾是否有需要trim的内容 */
   trimTexts?: [string, string];
   disabledTools?: string[];
+  agentSessionConfig?: AgentProcessConfig;
 }
 
 /**
@@ -247,6 +256,29 @@ export interface IAIBackService<
    * @deprecated
    */
   reportCompletion?<I extends IAIReportCompletionOption>(input: I): Promise<void>;
+
+  loadAgentSession?(
+    config: AgentProcessConfig,
+    agentSessionId: string,
+  ): Promise<{
+    sessionId: string;
+    messages: Array<{
+      role: 'user' | 'assistant';
+      content: string;
+      timestamp?: number;
+    }>;
+  }>;
+
+  listSessions?(config: AgentProcessConfig): Promise<ListSessionsResponse>;
+
+  createSession?(config: AgentProcessConfig): Promise<{
+    sessionId: string;
+    availableCommands: AvailableCommand[];
+  }>;
+
+  setSessionMode?(sessionId: string, modeId: string): Promise<void>;
+
+  ready?(): Promise<boolean>;
 }
 
 export class ReplyResponse {
@@ -306,6 +338,31 @@ export const MCPConfigServiceToken = Symbol('MCPConfigServiceToken');
 export const RulesServiceToken = Symbol('RulesServiceToken');
 export const ChatServiceToken = Symbol('ChatServiceToken');
 export const ChatAgentViewServiceToken = Symbol('ChatAgentViewServiceToken');
+export const ChatInputRegistryToken = Symbol('ChatInputRegistryToken');
+export const ChatViewRegistryToken = Symbol('ChatViewRegistryToken');
+export const ChatHistoryRegistryToken = Symbol('ChatHistoryRegistryToken');
+export const ChatInputFooterRegistryToken = Symbol('ChatInputFooterRegistryToken');
+
+/**
+ * Chat Input Footer Contribution Point
+ */
+export enum FooterButtonPosition {
+  LEFT = 'left',
+  RIGHT = 'right',
+}
+
+export interface ChatInputFooterItem {
+  component: React.ComponentType<any>;
+  order?: number;
+  position?: FooterButtonPosition;
+  visible?: () => boolean;
+}
+
+export interface IChatInputFooterRegistry {
+  registerFooterItem(id: string, item: ChatInputFooterItem): IDisposable;
+  getItems(): ChatInputFooterItem[];
+  onDidChange: Event<void>;
+}
 
 /**
  * Contribute Registry
@@ -467,3 +524,6 @@ export enum ECodeEditsSourceTyping {
   Trigger = 'trigger',
 }
 // ## Code Edits ends ##
+
+export * from './acp-types';
+export * from './agent-types';

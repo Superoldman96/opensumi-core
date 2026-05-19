@@ -1,19 +1,56 @@
 import { Injectable, Provider } from '@opensumi/di';
-import { AIBackSerivcePath, AIBackSerivceToken } from '@opensumi/ide-core-common';
+import {
+  AIBackSerivcePath,
+  AIBackSerivceToken,
+  AcpCliClientServiceToken,
+  AcpPermissionServicePath,
+} from '@opensumi/ide-core-common';
 import { NodeModule } from '@opensumi/ide-core-node';
-import { BaseAIBackService } from '@opensumi/ide-core-node/lib/ai-native/base-back.service';
 
 import { SumiMCPServerProxyServicePath, TokenMCPServerProxyService } from '../common';
 import { ToolInvocationRegistryManager, ToolInvocationRegistryManagerImpl } from '../common/tool-invocation-registry';
 
+import {
+  AcpAgentRequestHandler,
+  AcpAgentRequestHandlerToken,
+  AcpAgentService,
+  AcpAgentServiceToken,
+  AcpFileSystemHandler,
+  AcpFileSystemHandlerToken,
+  AcpPermissionCallerManager,
+  AcpPermissionCallerManagerToken,
+  AcpTerminalHandler,
+  AcpTerminalHandlerToken,
+  CliAgentProcessManager,
+  CliAgentProcessManagerToken,
+} from './acp';
+import { AcpCliBackService } from './acp/acp-cli-back.service';
+import { AcpCliClientService } from './acp/acp-cli-client.service';
 import { SumiMCPServerBackend } from './mcp/sumi-mcp-server';
+import { OpenAICompatibleModel } from './openai-compatible/openai-compatible-language-model';
 
 @Injectable()
 export class AINativeModule extends NodeModule {
   providers: Provider[] = [
     {
       token: AIBackSerivceToken,
-      useClass: BaseAIBackService,
+      useClass: AcpCliBackService,
+    },
+    {
+      token: AcpCliClientServiceToken,
+      useClass: AcpCliClientService,
+    },
+    {
+      token: CliAgentProcessManagerToken,
+      useClass: CliAgentProcessManager,
+    },
+    {
+      token: AcpAgentServiceToken,
+      useClass: AcpAgentService,
+    },
+    {
+      token: AcpPermissionCallerManagerToken,
+      useClass: AcpPermissionCallerManager,
     },
     {
       token: ToolInvocationRegistryManager,
@@ -23,6 +60,20 @@ export class AINativeModule extends NodeModule {
       token: TokenMCPServerProxyService,
       useClass: SumiMCPServerBackend,
     },
+    {
+      token: AcpFileSystemHandlerToken,
+      useClass: AcpFileSystemHandler,
+    },
+    {
+      token: AcpTerminalHandlerToken,
+      useClass: AcpTerminalHandler,
+    },
+    {
+      token: AcpAgentRequestHandlerToken,
+      useClass: AcpAgentRequestHandler,
+    },
+    // Language models for non-ACP fallback
+    OpenAICompatibleModel,
   ];
 
   backServices = [
@@ -37,6 +88,10 @@ export class AINativeModule extends NodeModule {
     {
       servicePath: SumiMCPServerProxyServicePath,
       token: TokenMCPServerProxyService,
+    },
+    {
+      servicePath: AcpPermissionServicePath,
+      token: AcpPermissionCallerManagerToken,
     },
   ];
 }

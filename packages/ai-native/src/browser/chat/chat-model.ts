@@ -300,12 +300,18 @@ export class ChatModel extends Disposable implements IChatModel {
 
   constructor(
     private chatFeatureRegistry: ChatFeatureRegistry,
-    initParams?: { sessionId?: string; history?: MsgHistoryManager; modelId?: string },
+    initParams?: { sessionId?: string; history?: MsgHistoryManager; modelId?: string; title?: string },
   ) {
     super();
     this.#sessionId = initParams?.sessionId ?? uuid();
     this.history = initParams?.history ?? new MsgHistoryManager(this.chatFeatureRegistry);
     this.#modelId = initParams?.modelId;
+    this.#title = initParams?.title ?? '';
+  }
+
+  #title: string;
+  get title(): string {
+    return this.#title;
   }
 
   #sessionId: string;
@@ -415,7 +421,6 @@ export class ChatModel extends Disposable implements IChatModel {
     try {
       return JSON.parse(jsonString);
     } catch (e) {
-      console.error(`[ChatModel] Failed to parse ${context}:`, e);
       return {};
     }
   }
@@ -502,12 +507,15 @@ export class ChatModel extends Disposable implements IChatModel {
     if (basicKind.includes(kind)) {
       request.response.updateContent(progress, quiet);
     } else {
-      console.error(`Couldn't handle progress: ${JSON.stringify(progress)}`);
+      // Couldn't handle progress
     }
   }
 
   getRequest(requestId: string): ChatRequestModel | undefined {
     return this.#requests.get(requestId);
+  }
+  getRequests(): ChatRequestModel[] {
+    return Array.from(this.#requests.values());
   }
 
   override dispose(): void {
@@ -575,6 +583,6 @@ export class ChatSlashCommandItemModel extends Disposable implements IChatSlashC
   }
 
   get nameWithSlash() {
-    return this.name.startsWith(SLASH_SYMBOL) ? this.name : `${SLASH_SYMBOL} ${this.name}`;
+    return this.name.startsWith(SLASH_SYMBOL) ? this.name : `${SLASH_SYMBOL}${this.name}`;
   }
 }
